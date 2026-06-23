@@ -10,8 +10,6 @@
   - 고용노동부 행정해석 (회계연도 기준 운영 시 퇴사 시점 입사일 기준 재정산 의무)
 """
 
-import calendar
-import math
 from datetime import date
 
 import pandas as pd
@@ -107,8 +105,8 @@ def calc_hire_basis(hire_date: date, ref_date: date) -> list[dict]:
 def calc_fiscal_basis(hire_date: date, ref_date: date) -> list[dict]:
     """
     [회계연도(1/1) 기준] 연차 발생 내역.
-      ① 첫 회계연도 전: 월별 연차 동일 적용
-      ② 첫 회계연도: 비례 부여 floor(15 × 근무일수/365)
+      ① 입사 후 1주년까지: 매 1개월 개근 시 1일 월차 (§60②, 입사 다음 해 포함)
+      ② 첫 회계연도(1/1): 비례 부여 (15 × 근무일수/365, 소수점 유지)
       ③ 이후 매 1/1: 근속연수 기반 정규 연차
     """
     if ref_date <= hire_date:
@@ -122,12 +120,11 @@ def calc_fiscal_basis(hire_date: date, ref_date: date) -> list[dict]:
         first_fiscal = date(hire_date.year + 1, FISCAL_MONTH, FISCAL_DAY)
 
     one_year_from_hire = hire_date + relativedelta(years=1)
-    cutoff = min(first_fiscal, one_year_from_hire)
 
-    # 첫 회계연도 이전 월별 연차
+    # 1년 미만 기간 전체 월별 연차 (입사 다음 해 포함, 1주년 전까지)
     for m in range(1, 12):
         d = hire_date + relativedelta(months=m)
-        if d >= cutoff or d > ref_date:
+        if d >= one_year_from_hire or d > ref_date:
             break
         records.append({"발생 시점": f"입사 {m}개월차", "발생일자": d,
                          "발생일수": 1, "산정 근거": "1년 미만 월차 (§60②)"})
@@ -139,11 +136,10 @@ def calc_fiscal_basis(hire_date: date, ref_date: date) -> list[dict]:
         years_done  = relativedelta(cur, hire_date).years
 
         if days_since < 365:
-            raw = 15 * days_since / 365
-            prop = math.floor(raw)
+            raw = round(15 * days_since / 365, 2)
             records.append({"발생 시점": f"{cur.year}년 1/1",
-                             "발생일자": cur, "발생일수": prop,
-                             "산정 근거": f"비례: 15×{days_since}일/365={raw:.1f}→{prop}일"})
+                             "발생일자": cur, "발생일수": raw,
+                             "산정 근거": f"비례: 15×{days_since}일/365={raw}일"})
         else:
             days = annual_leave_days(years_done)
             records.append({"발생 시점": f"{cur.year}년 1/1",
@@ -152,6 +148,7 @@ def calc_fiscal_basis(hire_date: date, ref_date: date) -> list[dict]:
 
         cur = date(cur.year + 1, FISCAL_MONTH, FISCAL_DAY)
 
+    records.sort(key=lambda r: r["발생일자"])
     return records
 
 
@@ -276,13 +273,13 @@ k1, k2, k3, k4 = st.columns(4)
 
 k1.metric(
     "📦 과거 기정산 (자동)",
-    f"{past_fiscal_paid:.0f}일",
+    f"{past_fiscal_paid:.2f}일",
     delta=f"{ref_date.year - 1}년 이전 회계연도 기준",
     delta_color="off",
 )
 k2.metric(
     f"📋 {ref_date.year}년 부여 연차",
-    f"{current_fiscal_grant:.0f}일",
+    f"{current_fiscal_grant:.2f}일",
     delta=f"{ref_date.year}년 1월 1일 기준",
     delta_color="off",
 )
@@ -295,14 +292,14 @@ k3.metric(
 if pay and final_remain > 0:
     k4.metric(
         "💡 최종 정산 대상",
-        f"{final_remain:.1f}일",
+        f"{final_remain:.2f}일",
         delta=f"수당: {pay['total']:,.0f}원",
         delta_color="off",
     )
 else:
     k4.metric(
         "💡 최종 정산 대상",
-        f"{final_remain:.1f}일",
+        f"{final_remain:.2f}일",
         delta=f"기준: {favorable_basis}",
         delta_color="off",
     )
@@ -323,7 +320,7 @@ def render_column(col, title: str, records: list[dict], total: float, is_favorab
                          use_container_width=True, hide_index=True, height=h)
         else:
             st.info("발생 내역이 없습니다.")
-        st.metric("총 발생일수", f"{total:.0f}일")
+        st.metric("총 발생일수", f"{total:.2f}일")
 
 
 col_l, col_r = st.columns(2, gap="large")
@@ -342,14 +339,14 @@ st.subheader("💡 최종 퇴직 정산 결론")
 # 재정산 상태 메시지
 if need_recount:
     st.error(
-        f"🚨 **재정산 필요**: 입사일 기준({hire_total:.0f}일)이 회계연도 기준({fiscal_total:.0f}일)보다 "
-        f"**{recount_days:.0f}일 더 많습니다.**\n\n"
+        f"🚨 **재정산 필요**: 입사일 기준({hire_total:.0f}일)이 회계연도 기준({fiscal_total:.2f}일)보다 "
+        f"**{recount_days:.2f}일 더 많습니다.**\n\n"
         "퇴직 시에는 근로자에게 유리한 입사일 기준으로 재정산해야 합니다. "
         "(고용노동부 행정해석, 근로조건지도과-2261)"
     )
 else:
     st.success(
-        f"✅ 회계연도 기준({fiscal_total:.0f}일)이 입사일 기준({hire_total:.0f}일) 이상입니다. "
+        f"✅ 회계연도 기준({fiscal_total:.2f}일)이 입사일 기준({hire_total:.0f}일) 이상입니다. "
         "기존 사내 기준대로 정산하면 됩니다."
     )
 
@@ -357,23 +354,23 @@ else:
 st.markdown("##### 📋 정산 내역 계산표")
 
 rows = [
-    ("회계연도 기준 총 발생", f"{fiscal_total:.0f}일", ""),
+    ("회계연도 기준 총 발생", f"{fiscal_total:.2f}일", ""),
     ("입사일 기준 총 발생",   f"{hire_total:.0f}일",   ""),
     ("━" * 20, "━" * 6, ""),
-    ("과거 기정산 차감",      f"- {past_fiscal_paid:.0f}일",
+    ("과거 기정산 차감",      f"- {past_fiscal_paid:.2f}일",
      f"{ref_date.year-1}년까지 회계연도 기준 자동 정산"),
 ]
 if need_recount:
-    rows.append(("법정 재정산 추가분", f"+ {recount_days:.0f}일",
+    rows.append(("법정 재정산 추가분", f"+ {recount_days:.2f}일",
                  "입사일 기준 초과분 (추가 지급 의무)"))
 rows += [
     (f"{ref_date.year}년 사용 연차 차감", f"- {current_year_used:.1f}일", "올해 실제 사용"),
     ("━" * 20, "━" * 6, ""),
-    ("✅ 최종 지급 대상 연차", f"**{final_remain:.1f}일**", f"기준: {favorable_basis}"),
+    ("✅ 최종 지급 대상 연차", f"**{final_remain:.2f}일**", f"기준: {favorable_basis}"),
 ]
 if pay and final_remain > 0:
     rows.append(("💴 지급해야 할 연차수당", f"**{pay['total']:,.0f}원**",
-                 f"1일 통상임금 {pay['daily_w']:,.0f}원 × {final_remain:.1f}일"))
+                 f"1일 통상임금 {pay['daily_w']:,.0f}원 × {final_remain:.2f}일"))
 
 df_calc = pd.DataFrame(rows, columns=["항목", "금액/일수", "비고"])
 st.dataframe(df_calc, use_container_width=True, hide_index=True)
@@ -388,8 +385,8 @@ if pay and final_remain > 0:
 | 시간당 통상임금 | {monthly_wage:,}원 ÷ 209시간 | **{pay['hourly']:,.2f}원** |
 | 1일 소정근로시간 | ({weekly_hours}h ÷ 40h) × 8h | **{pay['daily_h']:.2f}시간** |
 | **1일 통상임금** | {pay['hourly']:,.2f}원 × {pay['daily_h']:.2f}h | **{pay['daily_w']:,.0f}원** |
-| 정산 대상 연차 | {favorable_basis} 기준 | **{final_remain:.1f}일** |
-| **연차수당 총액** | {pay['daily_w']:,.0f}원 × {final_remain:.1f}일 | **{pay['total']:,.0f}원** |
+| 정산 대상 연차 | {favorable_basis} 기준 | **{final_remain:.2f}일** |
+| **연차수당 총액** | {pay['daily_w']:,.0f}원 × {final_remain:.2f}일 | **{pay['total']:,.0f}원** |
         """)
         if weekly_hours < 40:
             st.warning(
